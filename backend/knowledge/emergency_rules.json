@@ -1,0 +1,14 @@
+[
+  {"condition": "Possible heart attack", "keywords": ["chest pain", "pressure in chest", "radiating to arm", "sweating", "shortness of breath"], "warning": "Cardiac emergency suspected. Seek immediate medical attention.", "doctor_type": "Cardiologist"},
+  {"condition": "Stroke warning", "keywords": ["sudden weakness", "face drooping", "speech difficulty", "confusion", "one-sided numbness"], "warning": "Stroke symptoms detected. Call emergency services immediately.", "doctor_type": "Neurologist"},
+  {"condition": "Severe allergic reaction", "keywords": ["difficulty breathing", "swelling throat", "hives", "rapid pulse", "anaphylaxis"], "warning": "Possible anaphylaxis. Emergency care required.", "doctor_type": "Allergist"},
+  {"condition": "Severe dehydration", "keywords": ["dry mouth", "sunken eyes", "no urine", "confusion", "weak pulse"], "warning": "Severe dehydration may be dangerous. Get urgent medical help.", "doctor_type": "General Physician"},
+  {"condition": "Acute abdominal emergency", "keywords": ["severe abdominal pain", "rigid abdomen", "vomiting blood", "black stool", "shock"], "warning": "Abdominal emergency suspected. Do not delay visiting emergency care.", "doctor_type": "Surgeon"},
+  {"condition": "Breathing emergency", "keywords": ["can't breathe", "wheezing heavily", "choking", "blue lips", "stridor"], "warning": "Respiratory emergency. Seek immediate assistance.", "doctor_type": "Pulmonologist"},
+  {"condition": "Seizure", "keywords": ["seizure", "convulsions", "uncontrolled shaking", "loss of consciousness", "tonic clonic"], "warning": "Seizure detected. Get urgent medical evaluation.", "doctor_type": "Neurologist"},
+  {"condition": "Animal heatstroke", "keywords": ["excessive panting", "collapse", "red gums", "high temperature", "lethargy"], "warning": "Heatstroke in the animal may be life-threatening. Cool animal and call a vet immediately.", "doctor_type": "Veterinarian"},
+  {"condition": "Animal difficulty breathing", "keywords": ["gasping", "open mouth breathing", "wheezing", "chest heaving", "cyanosis"], "warning": "Respiratory distress in animal. Seek emergency veterinary care.", "doctor_type": "Veterinarian"},
+  {"condition": "Animal severe bleeding", "keywords": ["bleeding heavily", "not stopping", "deep wound", "blood loss", "shock"], "warning": "Severe bleeding in animal. Emergency veterinary help needed.", "doctor_type": "Veterinarian"},
+  {"condition": "Animal poisoning", "keywords": ["ingested toxin", "vomiting blood", "tremors", "convulsions", "drooling"], "warning": "Possible poisoning. Contact a veterinarian immediately.", "doctor_type": "Veterinarian"},
+  {"condition": "Child persistent high fever", "keywords": ["fever above 104", "persistent fever", "seizure", "lethargy", "stiff neck"], "warning": "High fever in child may be dangerous. Seek urgent care.", "doctor_type": "Pediatrician"}
+]

@@ -1,0 +1,729 @@
+1:        memory.current_stage = "diagnosis"
+3:        context_str       = build_symptom_context(memory.patient_answers)
+4:        enriched_symptoms = list(memory.all_symptoms())
+6:        # ── Save completed symptom report before transitioning ──────────
+7:        if memory.active_symptom and memory.active_symptom not in memory.completed_symptoms:
+8:            # Only save if not already recorded (prevent duplicates)
+9:            already_saved = any(
+10:                r.get("symptom") == memory.active_symptom
+11:                for r in memory.consultation_reports
+12:            )
+13:            if not already_saved:
+14:                memory.consultation_reports.append({
+15:                    "symptom": memory.active_symptom,
+16:                    "answers": memory.patient_answers.copy(),
+17:                })
+18:            memory.completed_symptoms.append(memory.active_symptom)
+20:        # ── Transition to next pending symptom if any remain ────────────
+21:        if memory.pending_symptoms:
+22:            next_symptom = memory.pending_symptoms.pop(0)
+23:            memory.active_symptom  = next_symptom
+24:            memory.patient_answers = {}
+25:            category = classify_symptom_category([next_symptom])
+26:            memory.symptom_category = category
+27:            memory.current_stage    = "collecting"
+28:            next_q = get_next_unanswered_question(category, {})
+29:            question_text = next_q["question"] if next_q else f"Please describe your {next_symptom}."
+30:            reply = (
+31:                f"I've collected enough information about "
+32:                f"**{memory.completed_symptoms[-1]}**.\n\n"
+33:                f"Now let's discuss your **{next_symptom}**.\n\n"
+34:                f"{question_text}"
+35:            )
+36:            return reply, memory
+38:        # ── All symptoms collected — run full diagnosis ─────────────────
+39:        for key, value in memory.patient_answers.items():
+40:            if str(value).lower().strip() in YES_VARIANTS:
+41:                sym = key.replace("_", " ")
+42:                if sym not in enriched_symptoms:
+43:                    enriched_symptoms.append(sym)
+45:        severity_raw = (
+46:            memory.patient_answers.get("severity") or
+47:            memory.patient_answers.get("itching_sev", "")
+48:        )
+49:        try:
+50:            severity_int = int(str(severity_raw).split("/")[0].strip()) if severity_raw else None
+51:        except (ValueError, AttributeError):
+52:            severity_int = None
+54:        duration_raw  = memory.patient_answers.get("duration", "")
+55:        duration_dict = self._parse_duration(str(duration_raw))
+57:        analysis = self.reasoning_engine.analyze_symptoms(
+58:            enriched_symptoms,
+59:            location=memory.patient_answers.get("location") or memory.location,
+60:            severity=severity_int,
+61:            duration=duration_dict,
+62:            history=context_str,
+63:        )
+65:        candidate, conf = self._apply_diagnosis_safety(
+66:            analysis.get("primary_diagnosis"),
+67:            analysis.get("confidence", 0),
+68:            enriched_symptoms,
+69:            memory.patient_answers,
+70:        )
+71:        memory.primary_diagnosis = candidate
+72:        memory.confidence        = conf
+74:        disease_record = find_disease(memory.primary_diagnosis, "human") if memory.primary_diagnosis else None
+76:        diag       = memory.primary_diagnosis or "Inconclusive \u2014 further evaluation needed"
+77:        risk       = (disease_record.get("risk_level", "medium") if disease_record else "medium").upper()
+78:        doctor     = (disease_record.get("doctor_type", "General Physician") if disease_record else "General Physician")
+79:        conf_label = "High" if conf >= 70 else "Medium" if conf >= 40 else "Low"
+81:        SEP = "\u2501" * 38  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+83:        def section(title: str) -> List[str]:
+84:            return ["", SEP, f"**{title}**", SEP, ""]
+86:        L: List[str] = []
+88:        # ── HIGH-RISK banner at the very top ───────────────────────────
+89:        if risk == "HIGH":
+90:            L += [
+91:                "\U0001f6a8 **HIGH RISK \u2014 URGENT MEDICAL ATTENTION REQUIRED**",
+92:                "\u26a0\ufe0f This assessment indicates a potentially serious condition.",
+93:                "Please consult a doctor today or go to an urgent care facility.",
+94:                "",
+95:            ]
+97:        # ── Low-confidence notice ──────────────────────────────────────
+98:        if conf < 40:
+99:            L += [
+100:                "\u2139\ufe0f **Low Confidence Assessment**",
+101:                "The available information is limited. Results below should be treated as general guidance only.",
+102:                "More detailed symptom information may improve accuracy.",
+103:                "",
+104:            ]
+106:        # ================================================================
+107:        # SECTION 1 — PATIENT SUMMARY
+108:        # ================================================================
+109:        L += section("\U0001f4cb  PATIENT SUMMARY")
+111:        sym_display = ", ".join(s.title() for s in memory.all_symptoms() if not s.startswith("__"))
+112:        L.append(f"\U0001f7e3 **Primary Symptom(s):**  {sym_display}")
+114:        loc_val = memory.patient_answers.get("location") or memory.location
+115:        if loc_val:
+116:            L.append(f"\U0001f4cd **Location:**  {loc_val}")
+118:        if duration_raw:
+119:            L.append(f"\u23f1\ufe0f **Duration:**  {duration_raw}")
+121:        if severity_int:
+122:            sev_bar = "\u2588" * severity_int + "\u2591" * (10 - severity_int)
+123:            L.append(f"\U0001f321\ufe0f **Severity:**  {severity_int}/10  [{sev_bar}]")
+125:        if memory.patient_answers.get("temperature"):
+126:            L.append(f"\U0001f321\ufe0f **Temperature:**  {memory.patient_answers['temperature']}")
+128:        if memory.extra_symptoms:
+129:            extras = ", ".join(s.title() for s in memory.extra_symptoms)
+130:            L.append(f"\u2795 **Associated Symptoms:**  {extras}")
+132:        # Collected findings sub-table
+133:        findings = [
+134:            (k.replace("_", " ").title(), v)
+135:            for k, v in memory.patient_answers.items()
+136:            if v and str(v).strip() and not k.startswith("__")
+137:            and k not in ("location", "duration", "severity", "itching_sev", "temperature")
+138:        ]
+139:        if findings:
+140:            L.append("")
+141:            L.append("**Additional Collected Findings:**")
+142:            for label, val in findings:
+143:                L.append(f"  \u2022 {label}: {val}")
+145:        # ================================================================
+146:        # SECTION 2 — CLINICAL ASSESSMENT
+147:        # ================================================================
+148:        L += section("\U0001f9ec  CLINICAL ASSESSMENT")
+150:        risk_emoji = "\U0001f534" if risk == "HIGH" else "\U0001f7e1" if risk == "MEDIUM" else "\U0001f7e2"
+151:        conf_bar   = "\u2588" * (conf // 10) + "\u2591" * (10 - conf // 10)
+153:        L.append(f"\U0001f3af **Most Likely Condition:**  {diag}")
+154:        L.append("")
+155:        L.append(f"\U0001f4ca **Confidence:**  {conf}%  [{conf_bar}]  \u2014 {conf_label} confidence")
+156:        L.append(f"{risk_emoji} **Risk Level:**  {risk.title()}")
+158:        if risk == "HIGH" or (severity_int and severity_int >= 8):
+159:            action = "\U0001f6a8 **Urgent Care** \u2014 See a doctor today or visit an urgent care clinic."
+160:        elif risk == "MEDIUM" or (severity_int and severity_int >= 5):
+161:            action = "\U0001f3e5 **Doctor Consultation** \u2014 Schedule an appointment within 1\u20132 days."
+162:        else:
+163:            action = "\U0001f3e0 **Self-Care** \u2014 Rest, hydrate, and monitor symptoms. See a doctor if worsening."
+164:        L.append(f"\U0001f4cc **Recommended Action:**  {action}")
+166:        if disease_record and disease_record.get("description"):
+167:            L.append("")
+168:            L.append(f"\U0001f4d6 **Clinical Note:**  {disease_record['description']}")
+170:        # ================================================================
+171:        # SECTION 3 — ALTERNATIVE CONDITIONS
+172:        # ================================================================
+173:        alternatives = analysis.get("alternative_diagnoses", [])
+174:        alt_list = [
+175:            a for a in alternatives[:3]
+176:            if a.get("disease") and a.get("disease") != diag
+177:        ]
+178:        if alt_list:
+179:            L += section("\U0001f50d  ALTERNATIVE CONDITIONS TO CONSIDER")
+180:            for i, a in enumerate(alt_list, 1):
+181:                cl  = "High" if a["confidence"] >= 70 else "Medium" if a["confidence"] >= 40 else "Low"
+182:                bar = "\u2588" * (a["confidence"] // 10) + "\u2591" * (10 - a["confidence"] // 10)
+183:                L.append(f"  {i}. **{a['disease']}**  \u2014  {a['confidence']}% [{bar}] ({cl})")
+185:        # ================================================================
+186:        # SECTION 4 — RECOMMENDED TESTS
+187:        # ================================================================
+188:        tests = [t for t in (disease_record.get("recommended_tests", []) if disease_record else []) if t]
+189:        if tests:
+190:            L += section("\U0001f9ea  RECOMMENDED TESTS")
+191:            for t in tests[:5]:
+192:                L.append(f"  \U0001f9ea {t}")
+194:        # ================================================================
+195:        # SECTION 5 — MEDICATION GUIDANCE
+196:        # ================================================================
+197:        medicines = [m for m in (disease_record.get("medicines", []) if disease_record else []) if m]
+198:        if medicines:
+199:            suffix = "  *(require doctor prescription)*" if risk == "HIGH" else ""
+200:            L += section("\U0001f48a  MEDICATION GUIDANCE")
+201:            for m in medicines[:4]:
+202:                L.append(f"  \U0001f48a {m}{suffix}")
+203:            L.append("")
+204:            L.append("  \u26a0\ufe0f Always consult a pharmacist or doctor before taking any medicine.")
+206:        # ================================================================
+207:        # SECTION 6 — WHAT YOU CAN DO
+208:        # ================================================================
+209:        precautions   = [p for p in (disease_record.get("precautions",   []) if disease_record else []) if p]
+210:        home_remedies = [r for r in (disease_record.get("home_remedies", []) if disease_record else []) if r]
+211:        care_items    = precautions[:3] + home_remedies[:2] + [
+212:            "Rest adequately and stay well hydrated.",
+213:            "Monitor your symptoms and note any changes.",
+214:        ]
+215:        L += section("\u2705  WHAT YOU CAN DO")
+216:        for item in care_items:
+217:            L.append(f"  \u2713 {item}")
+219:        # ================================================================
+220:        # SECTION 7 — RECOMMENDED DIET
+221:        # ================================================================
+222:        diet = [d for d in (disease_record.get("diet", []) if disease_record else []) if d]
+223:        if diet:
+224:            L += section("\U0001f96c  RECOMMENDED DIET")
+225:            for item in diet[:5]:
+226:                L.append(f"  \U0001f96c {item}")
+228:        # ================================================================
+229:        # SECTION 8 — RECOMMENDED SPECIALIST
+230:        # ================================================================
+231:        L += section("\U0001f469\u200d\u2695\ufe0f  RECOMMENDED SPECIALIST")
+232:        L.append(f"  \U0001f469\u200d\u2695\ufe0f **{doctor}**")
+233:        L.append("")
+234:        L.append("  Book an appointment as soon as possible if symptoms persist or worsen.")
+236:        # ================================================================
+237:        # SECTION 9 — EMERGENCY WARNING SIGNS
+238:        # ================================================================
+239:        L += section("\U0001f6a8  EMERGENCY WARNING SIGNS")
+240:        L.append("Seek immediate emergency care or call **108 / 112** if you experience:")
+241:        L.append("")
+242:        warnings = (
+243:            disease_record.get("emergency_warnings", [])[:4]
+244:            if disease_record and disease_record.get("emergency_warnings")
+245:            else [
+246:                "Chest pain worsens suddenly or spreads to arm / jaw",
+247:                "Difficulty breathing or inability to speak",
+248:                "Loss of consciousness or severe confusion",
+249:                "High fever (>104\u00b0F / 40\u00b0C) with stiff neck",
+250:                "Vomiting blood or blood in stool",
+251:            ]
+252:        )
+253:        for w in warnings:
+254:            L.append(f"  \u26a0\ufe0f {w}")
+255:        L.append("")
+256:        L.append("  \U0001f6a8 **Emergency helpline: 108 / 112**")
+258:        # ================================================================
+259:        # SECTION 10 — MEDICAL DISCLAIMER
+260:        # ================================================================
+261:        L += section("\u26a0\ufe0f  MEDICAL DISCLAIMER")
+262:        L += [
+263:            "  \u2022 This report is generated by an AI system based solely on your responses.",
+264:            "  \u2022 It is **NOT** a confirmed medical diagnosis.",
+265:            "  \u2022 Do **NOT** use this report as a substitute for professional medical advice.",
+266:            "  \u2022 Always consult a licensed healthcare professional for diagnosis and treatment.",
+267:            "  \u2022 Do not take any medicines without pharmacist or doctor guidance.",
+268:            "  \u2022 In any emergency, call **108 / 112** immediately.",
+269:            "",
+270:            SEP,
+271:        ]
+273:        return "\n".join(L), memory
+275:    # ------------------------------------------------------------------ #
+276:    #  Final consolidated report (multi-symptom)                          #
+277:    # ------------------------------------------------------------------ #
+279:    def _generate_final_report(self, memory: ConversationMemory) -> Tuple[str, ConversationMemory]:
+280:        """
+281:        Called when all symptoms have been collected.
+282:        Aggregates all consultation_reports + active symptom answers,
+283:        builds a consolidated symptom list, then reuses existing
+284:        _generate_diagnosis logic.
+285:        """
+286:        # Save active symptom if not yet recorded
+287:        if memory.active_symptom and memory.active_symptom not in memory.completed_symptoms:
+288:            already_saved = any(
+289:                r.get("symptom") == memory.active_symptom
+290:                for r in memory.consultation_reports
+291:            )
+292:            if not already_saved:
+293:                memory.consultation_reports.append({
+294:                    "symptom": memory.active_symptom,
+295:                    "answers": memory.patient_answers.copy(),
+296:                })
+297:            memory.completed_symptoms.append(memory.active_symptom)
+299:        # Aggregate all collected answers across symptoms
+300:        all_answers: Dict[str, Any] = {}
+301:        for report in memory.consultation_reports:
+302:            for k, v in report.get("answers", {}).items():
+303:                if k not in all_answers:
+304:                    all_answers[k] = v
+305:        # Current active answers take precedence
+306:        all_answers.update(memory.patient_answers)
+307:        memory.patient_answers = all_answers
+309:        # Aggregate all symptoms
+310:        all_syms = list(dict.fromkeys(
+311:            memory.completed_symptoms + memory.symptoms + memory.extra_symptoms
+312:        ))
+313:        memory.symptoms = all_syms
+315:        # Build the per-symptom findings header — professional report format
+316:        SEP = "\u2501" * 38
+318:        header_lines = [
+319:            SEP,
+320:            "**\U0001f4cb  AI HEALTH CONSULTATION REPORT**",
+321:            SEP,
+322:            "",
+323:        ]
+325:        # Symptoms discussed summary
+326:        if memory.completed_symptoms:
+327:            header_lines.append("**\U0001f9e0  Symptoms Assessed In This Consultation:**")
+328:            for i, sym in enumerate(memory.completed_symptoms, 1):
+329:                header_lines.append(f"  {i}. {sym.title()}")
+330:            header_lines.append("")
+332:        # Per-symptom findings — only meaningful (non-no, non-empty) answers
+333:        _SKIP_KEYS = {"blood_stool", "blood_in_vomit", "blood_urine", "blood_stool"}
+334:        has_findings = any(
+335:            str(v).strip().lower() not in ("", "no", "none", "not checked", "false")
+336:            for r in memory.consultation_reports
+337:            for k, v in r.get("answers", {}).items()
+338:            if not k.startswith("__")
+339:        )
+340:        if has_findings:
+341:            header_lines += ["", SEP, "**\U0001f4c4  FINDINGS BY SYMPTOM**", SEP, ""]
+342:            for report in memory.consultation_reports:
+343:                sym = report.get("symptom", "")
+344:                ans = report.get("answers", {})
+345:                if not sym:
+346:                    continue
+347:                # Only include answers with meaningful positive / numeric values
+348:                meaningful = [
+349:                    (k, v) for k, v in ans.items()
+350:                    if not k.startswith("__")
+351:                    and str(v).strip()
+352:                    and str(v).strip().lower() not in ("no", "none", "not checked", "false", "")
+353:                ]
+354:                if not meaningful:
+355:                    continue
+356:                header_lines.append(f"**{sym.title()}**")
+357:                for k, v in meaningful:
+358:                    label = k.replace("_", " ").title()
+359:                    # Format severity as bar
+360:                    if k in ("severity", "itching_sev"):
+361:                        try:
+362:                            n = int(str(v).split("/")[0].strip())
+363:                            bar = "\u2588" * n + "\u2591" * (10 - n)
+364:                            header_lines.append(f"  \u2022 {label}: {n}/10  [{bar}]")
+365:                            continue
+366:                        except (ValueError, TypeError):
+367:                            pass
+368:                    header_lines.append(f"  \u2022 {label}: {v}")
+369:                header_lines.append("")
+371:        header_lines += ["", SEP, ""]
+373:        # Run normal diagnosis generation (reuse existing logic)
+374:        diag_reply, memory = self._generate_diagnosis(memory)
+376:        return "\n".join(header_lines) + diag_reply, memory
+378:    # ------------------------------------------------------------------ #
+379:    #  Diagnosis safety guard                                              #
+380:    # ------------------------------------------------------------------ #
+382:    def _apply_diagnosis_safety(
+383:        self, candidate: Optional[str], conf: int,
+384:        symptoms: List[str], answers: Dict[str, Any],
+385:    ) -> Tuple[Optional[str], int]:
+386:        if not candidate:
+387:            return candidate, conf
+388:        key  = candidate.lower().strip()
+389:        rule = DIAGNOSIS_SAFETY_RULES.get(key)
+390:        if not rule:
+391:            return candidate, conf
+392:        all_text = " ".join(symptoms).lower() + " " + " ".join(str(v).lower() for v in answers.values())
+393:        if not any(req in all_text for req in rule["required_any"]):
+394:            return None, 0
+395:        found = sum(1 for s in rule["supporting"] if s in all_text)
+396:        if found < rule["required_count"]:
+397:            return candidate, min(conf, 35)
+398:        return candidate, conf
+400:    # ------------------------------------------------------------------ #
+401:    #  Validation                                                          #
+402:    # ------------------------------------------------------------------ #
+404:    def _validate_answer(self, message: str, step: Dict[str, Any]) -> Tuple[Any, bool, str]:
+405:        q_type = step.get("type", "text")
+406:        key    = step.get("key", "")
+407:        raw    = message.strip()
+408:        ctx    = key.replace("_", " ")
+410:        if not raw:
+411:            return None, False, ctx
+413:        corrected = TextNormalizer.spell_correct(raw)
+415:        # ── Semantic understanding layer (runs BEFORE strict validation) ──
+416:        # Converts natural human answers into structured medical values.
+417:        # e.g. "leg pain" -> yes for body_pain, "today morning" -> duration
+418:        inferred = infer_medical_meaning(raw, key, q_type)
+419:        if inferred is not None:
+420:            value, _note = inferred
+421:            return value, True, ctx
+423:        if q_type == "yesno":
+424:            normalized_yn = TextNormalizer.normalize_yes_no(corrected)
+425:            if normalized_yn == "Yes":
+426:                return "yes", True, ctx
+427:            if normalized_yn == "No":
+428:                return "no", True, ctx
+429:            low = corrected.lower()
+430:            if any(w in low for w in YES_VARIANTS):
+431:                return "yes", True, ctx
+432:            if any(w in low for w in NO_VARIANTS):
+433:                return "no", True, ctx
+434:            # Only reject if clearly off-topic
+435:            if TextNormalizer.is_context_mismatch(raw, "yes_no"):
+436:                return raw, False, ctx
+437:            return raw, False, ctx
+439:        if q_type == "number":
+440:            sev, is_valid = TextNormalizer.parse_severity(corrected)
+441:            if is_valid:
+442:                return sev, True, ctx
+443:            return raw, False, ctx
+445:        if key == "temperature":
+446:            if TextNormalizer.is_context_mismatch(raw, "temperature"):
+447:                return raw, False, ctx
+448:            tl = corrected.lower()
+449:            if re.search(r"\d", corrected):
+450:                return corrected, True, ctx
+451:            if any(w in tl for w in ["not check", "not measure", "don't know",
+452:                                     "unknown", "no thermometer", "didn't check",
+453:                                     "normal", "high", "low", "slight", "mild"]):
+454:                return corrected, True, ctx
+455:            return raw, False, ctx
+457:        if key == "duration":
+458:            # Natural phrases already handled by infer_medical_meaning above.
+459:            dur, is_valid = TextNormalizer.parse_duration(corrected)
+460:            if is_valid:
+461:                return f"{dur['value']} {dur['unit']}", True, ctx
+462:            tl = corrected.lower()
+463:            if re.search(
+464:                r"(since|from|last|this)\s+(morning|evening|night|week|month|yesterday|today)|"
+465:                r"(few|couple|several|a\s+few)\s+(hour|day|week|month)",
+466:                tl
+467:            ):
+468:                return corrected, True, ctx
+469:            return raw, False, ctx
+471:        if key in ("location", "which_joints", "affected_areas", "both_eyes", "both_ears"):
+472:            norm_loc = TextNormalizer.normalize_location(corrected)
+473:            if norm_loc:
+474:                return norm_loc, True, ctx
+475:            if set(corrected.lower().split()) & BODY_WORDS:
+476:                return corrected, True, ctx
+477:            if len(corrected.split()) >= 2:
+478:                return corrected, True, ctx
+479:            return raw, False, ctx
+481:        if key == "character":
+482:            if any(w in corrected.lower() for w in CHAR_WORDS):
+483:                return corrected, True, ctx
+484:            if len(corrected.split()) >= 2:
+485:                return corrected, True, ctx
+486:            return raw, False, ctx
+488:        if len(raw) < 2:
+489:            return raw, False, ctx
+490:        return raw, True, ctx
+492:    # ------------------------------------------------------------------ #
+493:    #  Red-flag escalation (mid-consultation)                             #
+494:    # ------------------------------------------------------------------ #
+496:    def _check_red_flag_escalation(self, memory: ConversationMemory) -> Optional[str]:
+497:        """
+498:        After saving an answer, check if a dangerous combination has emerged
+499:        that warrants stopping the normal consultation flow.
+500:        Returns an escalation message string, or None if safe to continue.
+501:        """
+502:        answers = memory.patient_answers
+503:        yes = lambda k: str(answers.get(k, "")).lower() == "yes"
+505:        # Cardiac: chest + radiating + sweating
+506:        if yes("radiates") and yes("sweating"):
+507:            return self._build_escalation_reply(
+508:                "chest pain radiating with sweating",
+509:                "These findings together can be signs of a cardiac event."
+510:            )
+511:        # Chest + breathless
+512:        if yes("breathless") and yes("chest_pain"):
+513:            return self._build_escalation_reply(
+514:                "chest pain with breathlessness",
+515:                "This combination requires urgent evaluation."
+516:            )
+517:        # GI bleed
+518:        if yes("blood_in_vomit") or yes("blood_stool"):
+519:            return self._build_escalation_reply(
+520:                "blood in vomit or stool",
+521:                "This is a red-flag finding that needs prompt medical attention."
+522:            )
+523:        # Neurological: severe headache + stiff neck
+524:        if yes("stiff_neck") and memory.severity and memory.severity >= 7:
+525:            return self._build_escalation_reply(
+526:                "severe headache with neck stiffness",
+527:                "This combination can indicate meningitis and requires urgent evaluation."
+528:            )
+529:        return None
+531:    def _build_escalation_reply(self, reason: str, clinical_note: str) -> str:
+532:        return (
+533:            f"\u26a0\ufe0f **Important Finding — {reason.title()}**\n\n"
+534:            f"{clinical_note}\n\n"
+535:            "I strongly recommend you **seek medical attention as soon as possible** \u2014 "
+536:            "today if you can.\n\n"
+537:            "\u2022 If symptoms are worsening rapidly, call **108 / 112** immediately.\n"
+538:            "\u2022 Do not wait for symptoms to resolve on their own."
+539:        )
+541:    # ------------------------------------------------------------------ #
+542:    #  Doctor-like response builders                                       #
+543:    # ------------------------------------------------------------------ #
+545:    def _build_opening_acknowledgement(
+546:        self, message: str, sym_display: str, extracted: Dict[str, Any]
+547:    ) -> str:
+548:        """
+549:        Build a warm, doctor-like opening that references what was already
+550:        extracted from the patient's first message.
+551:        """
+552:        known_parts = []
+553:        if extracted.get("location"):
+554:            known_parts.append(f"located in the **{extracted['location']}**")
+555:        if extracted.get("duration"):
+556:            known_parts.append(f"lasting **{extracted['duration']}**")
+557:        if extracted.get("severity") is not None:
+558:            known_parts.append(f"rated **{extracted['severity']}/10** in severity")
+560:        base = f"I understand \u2014 you're experiencing **{sym_display}**."
+561:        if known_parts:
+562:            base += " " + "I've noted it is " + ", ".join(known_parts) + "."
+563:        base += "\n\nThank you for that information. I'd like to ask a few more questions to better understand your situation."
+564:        return base
+566:    def _build_acknowledgement(self, key: str, answer: Any) -> str:
+567:        """
+568:        Build a short, natural doctor-like acknowledgement of the given answer.
+569:        Varies by question type to avoid sounding repetitive.
+570:        """
+571:        ACKS_YES = [
+572:            "I see, thank you.",
+573:            "Noted, that's helpful.",
+574:            "Thank you for letting me know.",
+575:            "I understand, thank you.",
+576:            "That information is useful.",
+577:        ]
+578:        ACKS_NO = [
+579:            "Understood.",
+580:            "Good to know, thank you.",
+581:            "Noted.",
+582:            "I see, thank you.",
+583:        ]
+584:        ACKS_GENERIC = [
+585:            "Thank you, I've noted that.",
+586:            "I understand.",
+587:            "That's helpful, thank you.",
+588:            "Noted.",
+589:            "Thank you for explaining that.",
+590:        ]
+592:        # Use a hash of the key to pick consistently but vary across questions
+593:        idx = abs(hash(key)) % 5
+594:        val = str(answer).lower().strip()
+595:        if val == "yes":
+596:            return ACKS_YES[idx % len(ACKS_YES)]
+597:        if val == "no":
+598:            return ACKS_NO[idx % len(ACKS_NO)]
+599:        if key == "severity":
+600:            v = answer if isinstance(answer, int) else 0
+601:            if v >= 8:
+602:                return "I understand \u2014 that sounds quite severe. Thank you for letting me know."
+603:            if v >= 5:
+604:                return "Thank you. A moderate level of discomfort \u2014 I've noted that."
+605:            return "Good to know, thank you."
+606:        if key == "duration":
+607:            return f"Thank you \u2014 I've noted that this has been going on for {answer}."
+608:        if key == "location":
+609:            return f"Noted \u2014 the {answer.lower()} area. Thank you."
+610:        if key == "temperature":
+611:            return "Thank you for that reading. I've made a note of it."
+612:        return ACKS_GENERIC[idx % len(ACKS_GENERIC)]
+614:    # ------------------------------------------------------------------ #
+615:    #  Emergency detection                                                 #
+616:    # ------------------------------------------------------------------ #
+618:    def _detect_emergency(self, text: str) -> str:
+619:        tl = text.lower()
+620:        for kw in EMERGENCY_KEYWORDS:
+621:            if kw in tl:
+622:                return kw
+623:        # Combo detection: each combo element is a phrase — check all present in text
+624:        for combo_phrases, label in EMERGENCY_COMBOS:
+625:            if all(phrase in tl for phrase in combo_phrases):
+626:                return label
+627:        return ""
+629:    def _build_emergency_reply(self, reason: str) -> str:
+630:        return (
+631:            "\u26a0\ufe0f **EMERGENCY WARNING**\n\n"
+632:            f"The symptoms you described ({reason}) may indicate a "
+633:            "**serious or life-threatening condition**.\n\n"
+634:            "**Please seek immediate medical attention right now.**\n\n"
+635:            "\u2022 Call emergency services: **108 / 112**\n"
+636:            "\u2022 Do NOT drive yourself to the hospital\n"
+637:            "\u2022 If you suspect a heart attack and are not allergic to aspirin, "
+638:            "chew one aspirin (325 mg) while waiting for help\n"
+639:            "\u2022 Stay calm and keep someone with you\n\n"
+640:            "Do not continue this consultation. Your safety is the priority."
+641:        )
+643:    def _is_emergency_memory(self, memory: ConversationMemory) -> bool:
+644:        if memory.primary_diagnosis:
+645:            d = find_disease(memory.primary_diagnosis, "human")
+646:            if d and d.get("emergency", False):
+647:                return True
+648:        for key in ("blood_in_vomit", "radiates", "sweating", "breathless"):
+649:            if str(memory.patient_answers.get(key, "")).lower() == "yes":
+650:                if key in ("radiates", "sweating", "breathless"):
+651:                    return True
+652:        return False
+654:    # ------------------------------------------------------------------ #
+655:    #  Message builders                                                    #
+656:    # ------------------------------------------------------------------ #
+658:    def _build_mismatch_message(self, step: Dict[str, Any], context_label: str) -> str:
+659:        q_type   = step.get("type", "text")
+660:        question = step.get("question", "")
+661:        key      = step.get("key", "")
+662:        examples = QUESTION_EXAMPLES.get(key, [])
+664:        lines = [
+665:            "I want to make sure I understand you correctly.",
+666:            "",
+667:            f"I'm asking about **{context_label}**.",
+668:            "",
+669:        ]
+670:        if q_type == "yesno":
+671:            lines.append("Could you please answer with **Yes** or **No**?")
+672:        elif q_type == "number":
+673:            lines.append("Could you rate it on a scale of **1 to 10**?")
+674:            lines.append("For example: 1 = very mild, 5 = moderate, 10 = unbearable")
+675:        elif examples:
+676:            lines.append("For example:")
+677:            for ex in examples[:4]:
+678:                lines.append(f"\u2022 {ex}")
+679:        lines += ["", f"**{question}**"]
+680:        return "\n".join(lines)
+682:    def _build_restart_prompt(self, current_q: Dict[str, Any]) -> str:
+683:        return (
+684:            "I'm finding it a little difficult to collect the information I need.\n\n"
+685:            "That's okay — this happens sometimes. How would you like to proceed?\n\n"
+686:            "\u2022 Type **1** \u2014 Continue where we left off\n"
+687:            "\u2022 Type **2** \u2014 Start a fresh consultation\n\n"
+688:            f"*(I was asking: {current_q['question']})*"
+689:        )
+691:    def _get_example_hint(self, step: Dict[str, Any]) -> str:
+692:        q_type = step.get("type", "text")
+693:        key    = step.get("key", "")
+694:        if q_type == "yesno":
+695:            return "Please reply with **Yes** or **No**."
+696:        if q_type == "number":
+697:            return "Please enter a number between **1 and 10**. For example: 7"
+698:        examples = QUESTION_EXAMPLES.get(key, [])
+699:        if examples:
+700:            return "Examples: " + ", ".join(f"*{e}*" for e in examples[:3])
+701:        return "Please describe in a few words."
+702:    def _handle_more_symptoms(
+703:        self,
+704:        message: str,
+705:        memory: ConversationMemory,
+706:    ) -> Tuple[str, ConversationMemory]:
+707:        low = message.lower().strip()
+709:        if low in {"no", "none", "nothing", "no more", "that's all", "thats all"}:
+710:            return self._generate_final_report(memory)
+712:        symptoms = self._extract_symptoms(message)
+714:        if symptoms:
+715:            for sym in symptoms:
+716:                if (
+717:                    sym not in memory.pending_symptoms
+718:                    and sym not in memory.completed_symptoms
+719:                    and sym != memory.active_symptom
+720:                ):
+721:                    memory.pending_symptoms.append(sym)
+723:            if not memory.pending_symptoms:
+724:                return self._generate_final_report(memory)
+726:            # Save current active symptom report before transitioning
+727:            if memory.active_symptom and memory.active_symptom not in memory.completed_symptoms:
+728:                already_saved = any(
+729:                    r.get("symptom") == memory.active_symptom
+730:                    for r in memory.consultation_reports
+731:                )
+732:                if not already_saved:
+733:                    memory.consultation_reports.append({
+734:                        "symptom": memory.active_symptom,
+735:                        "answers": memory.patient_answers.copy(),
+736:                    })
+737:                memory.completed_symptoms.append(memory.active_symptom)
+739:            next_symptom = memory.pending_symptoms.pop(0)
+740:            memory.active_symptom   = next_symptom
+741:            category                = classify_symptom_category([next_symptom])
+742:            memory.symptom_category = category
+743:            memory.patient_answers  = {}
+744:            memory.current_stage    = "collecting"
+745:            next_q = get_next_unanswered_question(category, {})
+746:            question_text = next_q["question"] if next_q else f"Please describe your {next_symptom}."
+747:            return (
+748:                f"Let's discuss your **{next_symptom}**.\n\n"
+749:                f"{question_text}",
+750:                memory,
+751:            )
+753:        return (
+754:            "Do you have any other symptoms?\n\n"
+755:            "If yes, please describe them. Otherwise, type **no**.",
+756:            memory,
+757:        )
+759:    # ------------------------------------------------------------------ #
+760:    #  Utilities                                                           #
+761:    # ------------------------------------------------------------------ #
+763:    def _sync_known_values(self, key: str, value: Any, memory: ConversationMemory) -> None:
+764:        if key == "location" and not memory.location:
+765:            memory.location = str(value)
+766:        elif key in ("severity", "itching_sev") and not memory.severity:
+767:            try:
+768:                memory.severity = int(str(value).split("/")[0])
+769:            except (ValueError, AttributeError):
+770:                pass
+771:        elif key == "duration" and not memory.duration:
+772:            memory.duration = self._parse_duration(str(value))
+774:    def _extract_symptoms(self, text: str) -> List[str]:
+775:        normalized = self.normalizer.normalize_text(text)
+776:        body_parts = self.normalizer.extract_body_parts(text)
+777:        symptoms: List[str] = []
+779:        disease = self.normalizer.fuzzy_match_disease(text)
+780:        if disease:
+781:            symptoms.append(disease)
+783:        KEYWORDS = [
+784:            "fever", "vomiting", "nausea", "headache", "chest pain", "chest tightness",
+785:            "stomach pain", "joint pain", "knee pain", "hip pain", "back pain",
+786:            "cough", "cold", "diarrhea", "rash", "itching", "fatigue", "weakness",
+787:            "dizziness", "vertigo", "anxiety", "depression", "insomnia",
+788:            "shortness of breath", "breathless", "wheezing", "sore throat",
+789:            "ear pain", "eye pain", "burning urination", "frequent urination",
+790:            "chills", "body pain", "muscle pain", "neck pain", "palpitations",
+791:            "bloating", "heartburn", "acidity", "loose motion", "skin rash",
+792:            "hives", "stiffness", "weight loss", "blurred vision",
+793:            "increased thirst", "allergy",
+794:        ]
+795:        for kw in KEYWORDS:
+796:            if kw in normalized and kw not in symptoms:
+797:                symptoms.append(kw)
+798:        for part in body_parts:
+799:            if part not in symptoms:
+800:                symptoms.append(part)
+801:        return list(dict.fromkeys(symptoms))
+803:    def _parse_duration(self, text: str) -> Optional[Dict[str, Any]]:
+804:        tl = text.lower()
+805:        for pattern, unit in [
+806:            (r"(\d+)\s*month", "months"),
+807:            (r"(\d+)\s*week",  "weeks"),
+808:            (r"(\d+)\s*day",   "days"),
+809:            (r"(\d+)\s*hour",  "hours"),
+810:        ]:
+811:            m = re.search(pattern, tl)
+812:            if m:
+813:                return {"value": int(m.group(1)), "unit": unit}
+814:        return None
+817:# --------------------------------------------------------------------------- #
+818:#  Backward-compatible wrapper                                                 #
+819:# --------------------------------------------------------------------------- #
+821:class AIDoctorEngine:
+822:    def __init__(self):
+823:        self.engine = EnhancedAIDoctorEngine()
+825:    def process_message(self, message: str, state: Optional[Dict] = None) -> Dict[str, Any]:
+826:        return self.engine.process_message(message, state)

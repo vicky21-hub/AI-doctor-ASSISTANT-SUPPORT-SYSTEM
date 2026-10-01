@@ -1,0 +1,10 @@
+[
+  {"system": "Respiratory", "organs": ["lungs", "bronchi", "trachea", "nose", "pharynx"], "common_conditions": ["Asthma", "Bronchitis", "Sinusitis"]},
+  {"system": "Cardiovascular", "organs": ["heart", "blood vessels", "arteries", "veins"], "common_conditions": ["Hypertension", "Heartburn", "Myocardial Infarction"]},
+  {"system": "Gastrointestinal", "organs": ["stomach", "intestines", "liver", "pancreas", "esophagus"], "common_conditions": ["Gastritis", "Diarrhea", "Food Poisoning"]},
+  {"system": "Neurological", "organs": ["brain", "spinal cord", "nerves"], "common_conditions": ["Migraine", "Stroke", "Seizure"]},
+  {"system": "Musculoskeletal", "organs": ["bones", "muscles", "joints", "ligaments"], "common_conditions": ["Muscle Strain", "Arthritis", "Back Pain"]},
+  {"system": "Dermatological", "organs": ["skin", "hair", "nails"], "common_conditions": ["Eczema", "Allergic Dermatitis", "Ringworm"]},
+  {"system": "Endocrine", "organs": ["thyroid", "pancreas", "adrenal glands"], "common_conditions": ["Diabetes", "Hypothyroidism"]},
+  {"system": "Renal", "organs": ["kidneys", "bladder", "ureters"], "common_conditions": ["Urinary Tract Infection", "Kidney Stone"]}
+]

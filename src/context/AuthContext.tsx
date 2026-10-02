@@ -28,7 +28,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Call backend logout to blacklist the token (Task 15)
     const token = localStorage.getItem('auth_token');
     if (token) {
-      fetch('http://localhost:5000/api/auth/logout', {
+      const base = (import.meta.env.VITE_API_BASE && !import.meta.env.VITE_API_BASE.includes('localhost'))
+        ? import.meta.env.VITE_API_BASE
+        : (import.meta.env.DEV ? 'http://localhost:5000' : '');
+      fetch(`${base}/api/auth/logout`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       }).catch(() => {}); // fire-and-forget

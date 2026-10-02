@@ -1,7 +1,9 @@
 // api.ts — Central axios instance with auth token injection
 import axios from 'axios';
 
-const BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+const BASE = (import.meta.env.VITE_API_BASE && !import.meta.env.VITE_API_BASE.includes('localhost'))
+  ? import.meta.env.VITE_API_BASE
+  : (import.meta.env.DEV ? 'http://localhost:5000' : '');
 
 export const api = axios.create({ baseURL: BASE, timeout: 10000 });
 

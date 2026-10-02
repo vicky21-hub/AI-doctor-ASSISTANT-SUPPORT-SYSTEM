@@ -1,13 +1,13 @@
 # ==============================================================================
 # Stage 1: Build Frontend (Vite + React)
 # ==============================================================================
-FROM node:20-alpine AS frontend-builder
+FROM node:20-slim AS frontend-builder
 
 WORKDIR /app
 
 # Install dependencies
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package*.json ./
+RUN npm install
 
 # Copy frontend source files
 COPY index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json tailwind.config.js postcss.config.js ./
@@ -57,3 +57,4 @@ EXPOSE 5000
 
 # Run with Gunicorn production WSGI server
 CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --threads 4 --timeout 120 app:app"]
+

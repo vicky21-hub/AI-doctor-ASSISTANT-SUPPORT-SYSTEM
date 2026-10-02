@@ -477,6 +477,8 @@ class ConversationMemory:
         self.severity: Optional[int]          = None
         self.duration: Optional[Dict]         = None
         self.medical_history: Optional[str]   = None
+        self.age: Optional[int]               = None
+        self.gender: Optional[str]            = None
 
     def to_dict(self) -> Dict:
         return {
@@ -493,6 +495,8 @@ class ConversationMemory:
             "severity":                self.severity,
             "duration":                self.duration,
             "medical_history":         self.medical_history,
+            "age":                     self.age,
+            "gender":                  self.gender,
             "active_symptom": self.active_symptom,
             "pending_symptoms": self.pending_symptoms,
             "completed_symptoms": self.completed_symptoms,
@@ -517,6 +521,8 @@ class ConversationMemory:
         self.severity                = data.get("severity")
         self.duration                = data.get("duration")
         self.medical_history         = data.get("medical_history")
+        self.age                     = data.get("age")
+        self.gender                  = data.get("gender")
 
     def reset_to_greeting(self) -> None:
         self.__init__()
@@ -560,6 +566,10 @@ class EnhancedAIDoctorEngine:
             reply, memory = self._handle_greeting(message, memory)
         elif memory.current_stage == "collecting":
             reply, memory = self._handle_collecting(message, memory)
+        elif memory.current_stage == "asking_age":
+            reply, memory = self._handle_asking_age(message, memory)
+        elif memory.current_stage == "asking_gender":
+            reply, memory = self._handle_asking_gender(message, memory)
         elif memory.current_stage == "awaiting_more_symptoms":
             reply, memory = self._handle_more_symptoms(
             message,
@@ -643,44 +653,82 @@ class EnhancedAIDoctorEngine:
     #  Stage: collecting answers                                           #
     # ------------------------------------------------------------------ #
 
+    def _is_requesting_diagnosis(self, message: str) -> bool:
+        low = message.strip().lower()
+        phrases = [
+            "full diagnosis", "diagnosis report", "diagnosis", "report",
+            "give me diagnosis", "give me report", "give me the diagnosis",
+            "give me the report", "i want diagnosis", "i want the diagnosis",
+            "i want the full diagnosis", "i want the full diagnosis report",
+            "show report", "show diagnosis", "final report", "final diagnosis",
+        ]
+        return any(p in low for p in phrases)
+
     def _handle_collecting(self, message: str, memory: ConversationMemory) -> Tuple[str, ConversationMemory]:
+        # If user requests diagnosis early before age/gender, prompt for age first
+        if self._is_requesting_diagnosis(message):
+            if memory.age is None:
+                memory.current_stage = "asking_age"
+                memory.failed_validations = 0
+                return "What is your age?", memory
+            elif memory.gender is None:
+                memory.current_stage = "asking_gender"
+                memory.failed_validations = 0
+                return "What is your gender?", memory
+            return self._generate_final_report(memory)
+
         current_q = self._get_next_smart_question(memory)
 
         if current_q is None:
-            return self._generate_diagnosis(memory)
+            if memory.age is None:
+                memory.current_stage = "asking_age"
+                memory.failed_validations = 0
+                return (
+                    "Thank you. I've noted your medical history and medication details.\n\n"
+                    "What is your age?"
+                ), memory
+            elif memory.gender is None:
+                memory.current_stage = "asking_gender"
+                memory.failed_validations = 0
+                return "What is your gender?", memory
+            return self._generate_final_report(memory)
 
-        # Step 1: Extract ALL information from the message (spell-corrected)
-        extracted = InfoExtractor.extract(message, current_q_key=current_q["key"])
-
-        # Step 2: Save extra symptoms mentioned alongside the answer
-        assoc = extracted.pop("__assoc__", [])
-        for sym in assoc:
-            if sym not in memory.all_symptoms():
-                memory.extra_symptoms.append(sym)
-
-        # Step 3: Validate the answer for the CURRENT question
+        # Step 1: Validate the answer for the CURRENT question FIRST
+        # DO NOT save or extract anything if the answer is invalid
         answer, valid, ctx = self._validate_answer(message, current_q)
 
         if not valid:
             memory.failed_validations += 1
             if memory.failed_validations >= MAX_INVALID_ATTEMPTS:
-                # Never ask "Type 1 or 2" — just skip the unanswerable question
-                # and move on naturally so the consultation never stalls.
-                memory.patient_answers[current_q["key"]] = message.strip() or "not provided"
+                memory.patient_answers[current_q["key"]] = "not provided"
                 memory.failed_validations = 0
                 next_q = self._get_next_smart_question(memory)
                 if next_q is None:
-                    return self._show_more_symptoms_prompt(memory)
+                    if memory.age is None:
+                        memory.current_stage = "asking_age"
+                        return (
+                            "Thank you. I've noted your medical history and medication details.\n\n"
+                            "What is your age?"
+                        ), memory
+                    elif memory.gender is None:
+                        memory.current_stage = "asking_gender"
+                        return "What is your gender?", memory
+                    return self._generate_final_report(memory)
                 return f"I understand. Let me move on.\n\n**{next_q['question']}**", memory
             return self._build_mismatch_message(current_q, ctx), memory
 
-        # Step 4: Save the validated answer
+        # Step 2: Answer is VALID — now extract auxiliary facts
+        extracted = InfoExtractor.extract(message, current_q_key=current_q["key"])
+        assoc = extracted.pop("__assoc__", [])
+        for sym in assoc:
+            if sym not in memory.all_symptoms():
+                memory.extra_symptoms.append(sym)
+
+        # Step 3: Save validated answer
         memory.patient_answers[current_q["key"]] = answer
         memory.failed_validations = 0
         self._sync_known_values(current_q["key"], answer, memory)
 
-        # If a yesno question received a descriptive answer, also store the
-        # raw text as an extra symptom so no information is lost.
         if current_q.get("type") == "yesno" and answer == "yes":
             raw_stripped = message.strip()
             yn_words = YES_VARIANTS | NO_VARIANTS | {"yes", "no"}
@@ -688,27 +736,32 @@ class EnhancedAIDoctorEngine:
                 if raw_stripped not in memory.all_symptoms():
                     memory.extra_symptoms.append(raw_stripped)
 
-        # Step 5: Save all other facts extracted from the same message
         self._apply_extracted(extracted, memory, current_q_key=current_q["key"])
 
-        # Step 6: Red-flag check — if a dangerous answer was just given, escalate
         escalation = self._check_red_flag_escalation(memory)
         if escalation:
             return escalation, memory
 
-        # Step 7: Get the next genuinely unanswered question
         next_q = self._get_next_smart_question(memory)
         if next_q is None:
-            return self._show_more_symptoms_prompt(memory)
+            if memory.age is None:
+                memory.current_stage = "asking_age"
+                memory.failed_validations = 0
+                return (
+                    "Thank you. I've noted your medical history and medication details.\n\n"
+                    "What is your age?"
+                ), memory
+            elif memory.gender is None:
+                memory.current_stage = "asking_gender"
+                memory.failed_validations = 0
+                return "What is your gender?", memory
+            return self._generate_final_report(memory)
 
-        # Doctor-like acknowledgement before next question
         ack = self._build_acknowledgement(current_q["key"], answer)
 
-        # If semantic inference resolved a body-pain description, add a note
         inferred = infer_medical_meaning(message, current_q["key"], current_q.get("type", "text"))
         if inferred is not None and current_q.get("type") == "yesno" and current_q["key"] in BODY_PAIN_KEYS:
             _, note = inferred
-            # Save the specific pain as an extra symptom too
             if note not in memory.all_symptoms():
                 memory.extra_symptoms.append(note)
             ack = (
@@ -717,10 +770,98 @@ class EnhancedAIDoctorEngine:
             )
         elif inferred is not None and current_q["key"] == "duration":
             _, note = inferred
-            ack = f"Thank you \u2014 I've noted that this started **{answer}**."
+            ack = f"Thank you — I've noted that this started **{answer}**."
 
         reply = f"{ack}\n\n**{next_q['question']}**"
         return reply, memory
+
+    # ------------------------------------------------------------------ #
+    #  Stage: patient profile (age & gender)                               #
+    # ------------------------------------------------------------------ #
+
+    def _validate_patient_age(self, text: str) -> Tuple[Optional[int], bool]:
+        raw = text.strip()
+        tl  = raw.lower()
+
+        if re.search(r'\b(day|week|month|hour|minute|min)s?\b', tl):
+            return None, False
+
+        if any(w in tl for w in ["pain", "hurt", "hurts", "ache", "fever", "vomit", "cough", "nausea", "headache", "leg", "arm"]):
+            return None, False
+
+        m = re.search(r'\b(\d{1,3})\b', tl)
+        if m:
+            try:
+                val = int(m.group(1))
+                if 1 <= val <= 120:
+                    return val, True
+            except ValueError:
+                pass
+        return None, False
+
+    def _handle_asking_age(self, message: str, memory: ConversationMemory) -> Tuple[str, ConversationMemory]:
+        age_val, valid = self._validate_patient_age(message)
+        if not valid:
+            memory.failed_validations += 1
+            if memory.failed_validations >= MAX_INVALID_ATTEMPTS:
+                memory.age = 30
+                memory.patient_answers["age"] = "30"
+                memory.current_stage = "asking_gender"
+                memory.failed_validations = 0
+                return "Understood. What is your gender?", memory
+            return (
+                "Please provide a valid age in years (for example: 21).\n\n"
+                "What is your age?"
+            ), memory
+
+        memory.age = age_val
+        memory.patient_answers["age"] = str(age_val)
+        memory.current_stage = "asking_gender"
+        memory.failed_validations = 0
+        return "What is your gender?", memory
+
+    def _validate_patient_gender(self, text: str) -> Tuple[Optional[str], bool]:
+        tl = text.strip().lower()
+
+        if any(w in tl for w in ["pain", "hurt", "hurts", "ache", "fever", "vomit", "cough", "nausea", "day", "week", "year"]):
+            return None, False
+        if re.search(r'\b\d+\b', tl):
+            return None, False
+
+        MALE_SET   = {"male", "m", "man", "boy", "gentleman", "purush"}
+        FEMALE_SET = {"female", "f", "woman", "girl", "lady", "mahila", "stree"}
+        OTHER_SET  = {"other", "non-binary", "nonbinary", "transgender", "prefer not to say", "nb"}
+
+        words = set(re.findall(r'[a-zA-Z]+', tl))
+        if words & FEMALE_SET or tl in FEMALE_SET:
+            return "Female", True
+        if words & MALE_SET or tl in MALE_SET:
+            return "Male", True
+        if words & OTHER_SET or tl in OTHER_SET:
+            return "Other", True
+
+        return None, False
+
+    def _handle_asking_gender(self, message: str, memory: ConversationMemory) -> Tuple[str, ConversationMemory]:
+        gender_val, valid = self._validate_patient_gender(message)
+        if not valid:
+            memory.failed_validations += 1
+            if memory.failed_validations >= MAX_INVALID_ATTEMPTS:
+                memory.gender = "Not specified"
+                memory.patient_answers["gender"] = "Not specified"
+                memory.current_stage = "diagnosis"
+                memory.failed_validations = 0
+                return self._generate_final_report(memory)
+            return (
+                "Please specify your gender (Male, Female, or Other).\n\n"
+                "What is your gender?"
+            ), memory
+
+        memory.gender = gender_val
+        memory.patient_answers["gender"] = gender_val
+        memory.failed_validations = 0
+        return self._generate_final_report(memory)
+
 
     # ------------------------------------------------------------------ #
     #  Smart question selection — skips already-known fields              #
@@ -816,6 +957,15 @@ class EnhancedAIDoctorEngine:
     # ------------------------------------------------------------------ #
 
     def _generate_diagnosis(self, memory: ConversationMemory) -> Tuple[str, ConversationMemory]:
+        if memory.age is None:
+            memory.current_stage = "asking_age"
+            memory.failed_validations = 0
+            return "What is your age?", memory
+        if memory.gender is None:
+            memory.current_stage = "asking_gender"
+            memory.failed_validations = 0
+            return "What is your gender?", memory
+
         memory.current_stage = "diagnosis"
 
         context_str       = build_symptom_context(memory.patient_answers)
@@ -920,7 +1070,11 @@ class EnhancedAIDoctorEngine:
         L.append("")
 
         sym_display = ", ".join(s.title() for s in memory.all_symptoms() if not s.startswith("__"))
-        L.append(f"\u2022 Primary Complaint: {sym_display}")
+        L.append(f"• Primary Complaint: {sym_display}")
+        if memory.age:
+            L.append(f"• Age: {memory.age}")
+        if memory.gender:
+            L.append(f"• Gender: {memory.gender}")
 
         loc_val = memory.patient_answers.get("location") or memory.location
         if loc_val:
@@ -941,7 +1095,7 @@ class EnhancedAIDoctorEngine:
             for k, v in memory.patient_answers.items()
             if v and str(v).strip()
             and not k.startswith("__")
-            and k not in ("location", "duration", "severity", "itching_sev", "temperature")
+            and k not in ("location", "duration", "severity", "itching_sev", "temperature", "age", "gender")
             and str(v).strip().lower() not in ("no", "none", "not checked", "false")
         ]
         if findings:
@@ -1078,6 +1232,14 @@ class EnhancedAIDoctorEngine:
         builds a consolidated symptom list, then reuses existing
         _generate_diagnosis logic.
         """
+        if memory.age is None:
+            memory.current_stage = "asking_age"
+            memory.failed_validations = 0
+            return "What is your age?", memory
+        if memory.gender is None:
+            memory.current_stage = "asking_gender"
+            memory.failed_validations = 0
+            return "What is your gender?", memory
         # Save active symptom if not yet recorded
         if memory.active_symptom and memory.active_symptom not in memory.completed_symptoms:
             already_saved = any(
@@ -1203,24 +1365,66 @@ class EnhancedAIDoctorEngine:
             return value, True, ctx
 
         if q_type == "yesno":
-            normalized_yn = TextNormalizer.normalize_yes_no(corrected)
-            if normalized_yn == "Yes":
+            tl = corrected.lower().strip()
+            # Duration phrases are never valid yes/no answers
+            if re.search(r'\b\d+\s*(day|hour|week|month|min|year)s?\b', tl):
+                return raw, False, ctx
+            if any(w in tl for w in ["since morning", "since yesterday", "yesterday", "today morning", "few days"]):
+                return raw, False, ctx
+
+            # Exact or clean token extraction
+            tokens = set(re.findall(r'[a-zA-Z]+', tl))
+
+            YES_SET = {"yes", "y", "yep", "yeah", "yah", "sure", "correct", "true", "yup", "haan", "avunu", "affirmative", "aye", "ok", "okay"}
+            NO_SET  = {"no", "n", "nope", "nah", "nay", "false", "never", "nahi", "ledu", "negative"}
+
+            first_token = re.split(r'[\s,\.!?]+', tl)[0] if tl else ""
+
+            if first_token in YES_SET and not (tokens & NO_SET):
                 return "yes", True, ctx
-            if normalized_yn == "No":
+            elif first_token in NO_SET and not (tokens & YES_SET):
                 return "no", True, ctx
-            low = corrected.lower()
-            if any(w in low for w in YES_VARIANTS):
+            elif tl in {"i do", "i have it", "positive", "definitely"}:
                 return "yes", True, ctx
-            if any(w in low for w in NO_VARIANTS):
+            elif tl in {"i dont", "i don't", "i do not", "none", "neither", "nothing", "no symptoms"}:
                 return "no", True, ctx
-            # Descriptive answer to a yes/no question (e.g. "burning sensation",
-            # "it hurts a lot") — treat as implicit yes and store the raw text
-            # as an extra symptom note rather than failing validation.
-            if len(raw.strip()) >= 3:
-                return "yes", True, ctx
+
+            # Any off-topic or descriptive answer (e.g. "My stomach hurts badly", "3 days") is rejected
             return raw, False, ctx
 
-        if q_type == "number":
+        if q_type == "number" or key in ("vomit_count", "frequency"):
+            tl = corrected.lower().strip()
+            # Duration answers are NOT numbers (e.g., "3 days" is duration, not a count or scale)
+            if re.search(r'\b(day|hour|week|month|min|year)s?\b', tl):
+                return raw, False, ctx
+
+            # Check count questions (vomit_count, frequency)
+            if key in ("vomit_count", "frequency"):
+                m = re.search(r'\b(\d{1,3})\b', tl)
+                if m:
+                    try:
+                        count_val = int(m.group(1))
+                        if 0 <= count_val <= 100:
+                            return str(count_val), True, ctx
+                    except ValueError:
+                        pass
+
+                WORD_COUNTS = {
+                    "zero": "0", "none": "0", "never": "0",
+                    "once": "1", "one": "1",
+                    "twice": "2", "two": "2",
+                    "thrice": "3", "three": "3",
+                    "four": "4", "five": "5", "six": "6",
+                    "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+                }
+                words = set(re.findall(r'[a-zA-Z]+', tl))
+                for w, num_str in WORD_COUNTS.items():
+                    if w in words:
+                        return num_str, True, ctx
+
+                return raw, False, ctx
+
+            # Severity / itching scale (1-10)
             sev, is_valid = TextNormalizer.parse_severity(corrected)
             if is_valid:
                 return sev, True, ctx
@@ -1461,8 +1665,11 @@ class EnhancedAIDoctorEngine:
         if q_type == "yesno":
             lines.append("Could you please answer with **Yes** or **No**?")
         elif q_type == "number":
-            lines.append("Could you rate it on a scale of **1 to 10**?")
-            lines.append("For example: 1 = very mild, 5 = moderate, 10 = unbearable")
+            if key in ("vomit_count", "frequency"):
+                lines.append("Please provide a number (for example: 3).")
+            else:
+                lines.append("Could you rate it on a scale of **1 to 10**?")
+                lines.append("For example: 1 = very mild, 5 = moderate, 10 = unbearable")
         elif examples:
             lines.append("For example:")
             for ex in examples[:4]:

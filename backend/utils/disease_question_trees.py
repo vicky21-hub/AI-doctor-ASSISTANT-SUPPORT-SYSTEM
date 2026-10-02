@@ -65,6 +65,7 @@ SYMPTOM_CATEGORY_MAP: Dict[str, str] = {
 
     # Stomach
     "stomach pain": "stomach_pain", "abdominal pain": "stomach_pain",
+    "lower abdominal pain": "stomach_pain", "upper abdominal pain": "stomach_pain",
     "gastric pain": "stomach_pain", "heartburn": "stomach_pain",
     "acidity": "stomach_pain", "bloating": "stomach_pain",
     "diarrhea": "stomach_pain", "loose motion": "stomach_pain",
@@ -110,7 +111,7 @@ SYMPTOM_CATEGORY_MAP: Dict[str, str] = {
 QUESTION_TREES: Dict[str, List[Dict[str, Any]]] = {
 
     "vomiting": [
-        {"key": "vomit_count",    "question": "How many times have you vomited in the last 24 hours?",                            "type": "text",   "required": True},
+        {"key": "vomit_count",    "question": "How many times have you vomited in the last 24 hours?",                            "type": "number", "required": True},
         {"key": "has_fever",      "question": "Do you have a fever along with the vomiting? (yes / no)",                          "type": "yesno",  "required": True},
         {"key": "stomach_pain",   "question": "Do you have any stomach pain or cramps? (yes / no)",                               "type": "yesno",  "required": True},
         {"key": "has_diarrhea",   "question": "Are you also having diarrhea or loose stools? (yes / no)",                         "type": "yesno",  "required": True},
@@ -209,7 +210,7 @@ QUESTION_TREES: Dict[str, List[Dict[str, Any]]] = {
     ],
 
     "urinary": [
-        {"key": "frequency",       "question": "Approximately how many times do you urinate per day?",                                                 "type": "text",   "required": True},
+        {"key": "frequency",       "question": "Approximately how many times do you urinate per day?",                                                 "type": "number", "required": True},
         {"key": "burning",         "question": "Do you feel burning or pain while urinating? (yes / no)",                                              "type": "yesno",  "required": True},
         {"key": "blood_urine",     "question": "Have you noticed any blood or reddish color in your urine? (yes / no)",                                "type": "yesno",  "required": True},
         {"key": "cloudy_urine",    "question": "Is your urine cloudy, dark, or has an unusual smell? (yes / no)",                                      "type": "yesno",  "required": True},

@@ -77,11 +77,11 @@ function renderMessage(text: string) {
         <div key={i} className="flex items-start gap-2 my-0.5 ml-1">
           <span className="mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0"
             style={{ backgroundColor: '#3B82F6' }} />
-          <span className="flex-1 flex flex-wrap">{rendered}</span>
+          <span className="flex-1 leading-relaxed whitespace-pre-wrap">{rendered}</span>
         </div>
       );
     }
-    return <div key={i} className="flex flex-wrap">{rendered}</div>;
+    return <div key={i} className="leading-relaxed whitespace-pre-wrap">{rendered}</div>;
   });
 }
 
@@ -153,9 +153,8 @@ function ChatBubble({ msg, isDark, isDiagnosis }: { msg: Message; isDark: boolea
 
 // ─── Stage Progress Bar ───────────────────────────────────────────────────────
 // Matches the actual backend stages returned in state.current_stage
-// Backend flow: greeting → asking_severity → asking_duration → asking_history → diagnosis
-const BACKEND_STAGES = ['greeting', 'asking_severity', 'asking_duration', 'asking_history', 'diagnosis'];
-const STAGE_LABELS   = ['Start', 'Severity', 'Duration', 'History', 'Result'];
+const BACKEND_STAGES = ['greeting', 'collecting', 'asking_age', 'asking_gender', 'diagnosis'];
+const STAGE_LABELS   = ['Start', 'Questions', 'Age', 'Gender', 'Result'];
 
 function StageBar({ stage, isDark }: { stage: string; isDark: boolean }) {
   const raw = stage || 'greeting';

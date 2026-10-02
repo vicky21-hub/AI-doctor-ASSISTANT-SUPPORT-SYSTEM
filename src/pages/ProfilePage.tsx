@@ -3,7 +3,6 @@ import { motion } from 'framer-motion';
 import { User, Mail, Lock, Save, Loader2, CheckCircle, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { authAPI } from '../utils/api';
 import api from '../utils/api';
 
 export default function ProfilePage() {

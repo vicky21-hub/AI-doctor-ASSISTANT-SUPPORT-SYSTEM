@@ -6,14 +6,16 @@ export type Lang = 'en' | 'te' | 'hi' | 'mixed';
 export interface ConversationState {
   // Stage names match the backend EnhancedAIDoctorEngine stages exactly
   // so state round-trips correctly between frontend and backend.
-  stage: 'greeting' | 'collecting' | 'awaiting_more_symptoms' | 'diagnosis';
-  current_stage: 'greeting' | 'collecting' | 'awaiting_more_symptoms' | 'diagnosis';
+  stage: 'greeting' | 'collecting' | 'asking_age' | 'asking_gender' | 'awaiting_more_symptoms' | 'diagnosis';
+  current_stage: 'greeting' | 'collecting' | 'asking_age' | 'asking_gender' | 'awaiting_more_symptoms' | 'diagnosis';
   symptom: string;
   symptoms: string[];
   location: string;
   severity: string;
   duration: string;
   history: string;
+  age?: number | string;
+  gender?: string;
   lang: Lang;
 }
 
@@ -347,6 +349,15 @@ export function processMessage(
       diagnosisData,
     };
   }
+
+  const diagnosisData = DIAGNOSES[state.symptom] || DIAGNOSES.general;
+  const finalState = { ...state, stage: 'diagnosis' as const, current_stage: 'diagnosis' as const };
+  return {
+    reply: formatDiagnosis(diagnosisData, finalState),
+    newState: finalState,
+    isDiagnosis: true,
+    diagnosisData,
+  };
 }
 
 export { DIAGNOSES };

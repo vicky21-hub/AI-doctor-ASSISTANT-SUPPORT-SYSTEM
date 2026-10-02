@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Stethoscope, Menu, X, Sun, Moon, Globe, ChevronDown, LogOut, User, Settings } from 'lucide-react';
+import { Stethoscope, Menu, X, Sun, Moon, Globe, ChevronDown, LogOut, User } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';

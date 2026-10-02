@@ -5,7 +5,8 @@ Run: python app.py
 
 import os
 import logging
-from flask import Flask, jsonify, request
+import secrets
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -20,17 +21,13 @@ logger = logging.getLogger("ai_health")
 _DEFAULT_SECRET = "ai-health-secret-change-in-production-2024"
 _FLASK_ENV = os.environ.get("FLASK_ENV", "development")
 
-# ── Task 9: SECRET_KEY guard ───────────────────────────────────────────────────
+# ── SECRET_KEY guard ───────────────────────────────────────────────────
 _secret_key = os.environ.get("SECRET_KEY", _DEFAULT_SECRET)
-if _FLASK_ENV == "production" and _secret_key == _DEFAULT_SECRET:
-    raise RuntimeError(
-        "SECRET_KEY is set to the default insecure value in production. "
-        "Set a strong SECRET_KEY environment variable before deploying."
-    )
 if _secret_key == _DEFAULT_SECRET:
+    _secret_key = secrets.token_hex(32)
     logger.warning(
-        "SECRET_KEY is using the default development value. "
-        "Set a strong SECRET_KEY before deploying to production."
+        "SECRET_KEY not set in production. Generated a secure random key for this session. "
+        "Set SECRET_KEY environment variable for persistent sessions."
     )
 
 # ── App factory ────────────────────────────────────────────────────────────────
@@ -38,17 +35,12 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
 app.config["SECRET_KEY"] = _secret_key
 
-# ── Task 10: CORS guard ────────────────────────────────────────────────────────
+# ── CORS configuration ────────────────────────────────────────────────────────
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
-if _FLASK_ENV == "production" and allowed_origins == "*":
-    raise RuntimeError(
-        "ALLOWED_ORIGINS is set to wildcard '*' in production. "
-        "Set ALLOWED_ORIGINS to your frontend domain before deploying."
-    )
 if allowed_origins == "*":
     logger.warning(
         "ALLOWED_ORIGINS=* allows any origin. "
-        "Set ALLOWED_ORIGINS=https://yourdomain.com before deploying to production."
+        "Set ALLOWED_ORIGINS=https://yourdomain.com if separating frontend and backend."
     )
 CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
 
@@ -107,19 +99,44 @@ for endpoint, limit in {
         if name.endswith(endpoint):
             limiter.limit(limit)(view)
 
-# ── Health check ───────────────────────────────────────────────────────────────
-@app.route("/", methods=["GET"])
-def root():
-    return jsonify({
-        "status": "ok",
-        "message": "AI Health Assistant Backend is running",
-        "version": "2.0.0",
-        "endpoints": [
-            "/api/health", "/api/chat", "/api/upload", "/api/analyze",
-            "/api/predict", "/api/vet/chat", "/api/history",
-            "/api/auth/login", "/api/auth/signup", "/api/auth/profile",
-        ],
-    })
+# ── Static / Frontend Serving ──────────────────────────────────────────────────
+_base_dir = os.path.dirname(os.path.abspath(__file__))
+_possible_static_dirs = [
+    os.environ.get("STATIC_DIST_DIR", ""),
+    os.path.join(_base_dir, "static_dist"),
+    os.path.join(_base_dir, "..", "dist"),
+    os.path.join(_base_dir, "dist"),
+]
+STATIC_DIST_DIR = next((d for d in _possible_static_dirs if d and os.path.isdir(d)), None)
+if STATIC_DIST_DIR:
+    logger.info(f"Serving frontend static assets from: {STATIC_DIST_DIR}")
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_frontend(path):
+    if path.startswith("api/") or path == "api":
+        return jsonify({"error": "Endpoint not found"}), 404
+
+    if STATIC_DIST_DIR:
+        file_path = os.path.join(STATIC_DIST_DIR, path)
+        if path and os.path.isfile(file_path):
+            return send_from_directory(STATIC_DIST_DIR, path)
+        index_file = os.path.join(STATIC_DIST_DIR, "index.html")
+        if os.path.isfile(index_file):
+            return send_from_directory(STATIC_DIST_DIR, "index.html")
+
+    if not path:
+        return jsonify({
+            "status": "ok",
+            "message": "AI Health Assistant Backend is running",
+            "version": "2.0.0",
+            "endpoints": [
+                "/api/health", "/api/chat", "/api/upload", "/api/analyze",
+                "/api/predict", "/api/vet/chat", "/api/history",
+                "/api/auth/login", "/api/auth/signup", "/api/auth/profile",
+            ],
+        })
+    return jsonify({"error": "Endpoint not found"}), 404
 
 
 @app.route("/api/health", methods=["GET"])

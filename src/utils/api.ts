@@ -31,7 +31,7 @@ export const uploadAPI = {
     form.append('file', file);
     return api.post('/api/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 60000, // 60s timeout for large uploads
+      timeout: 120000, // 120s timeout for uploads
     });
   },
 };

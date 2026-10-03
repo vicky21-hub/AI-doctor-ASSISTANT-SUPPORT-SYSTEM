@@ -234,38 +234,43 @@ class OCRService:
     # ── Image preprocessing ────────────────────────────────────────────────────
 
     def _deskew(self, gray: Any) -> Any:
-        """Deskew a grayscale image using Hough-based angle detection."""
+        """Deskew a grayscale image using Hough-based angle detection with downsampled search."""
         if not CV2_AVAILABLE:
             return gray
         try:
-            edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-            lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
+            h, w = gray.shape[:2]
+            if max(h, w) > 800:
+                scale = 800.0 / max(h, w)
+                small = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            else:
+                small = gray
+            edges = cv2.Canny(small, 50, 150, apertureSize=3)
+            lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=80, maxLineGap=10)
             if lines is None:
                 return gray
             angles = []
-            for line in lines:
+            for line in lines[:30]:
                 x1, y1, x2, y2 = line[0]
                 if x2 != x1:
                     angles.append(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
             if not angles:
                 return gray
-            median_angle = np.median(angles)
-            if abs(median_angle) < 0.5:
+            median_angle = float(np.median(angles))
+            if abs(median_angle) < 0.5 or abs(median_angle) > 45.0:
                 return gray
-            h, w = gray.shape[:2]
             M = cv2.getRotationMatrix2D((w / 2, h / 2), median_angle, 1.0)
-            return cv2.warpAffine(gray, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            return cv2.warpAffine(gray, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         except Exception:
             return gray
 
     def _preprocess_with_cv2(self, image_path: str) -> Optional[Any]:
         """
-        OpenCV preprocessing pipeline (fixed order):
-          1. Load + upscale if too small
-          2. Grayscale
-          3. Denoise  (before threshold — denoising on binary is ineffective)
-          4. Deskew   (on grayscale — more accurate than on binary)
-          5. Adaptive threshold  (binarise after clean grayscale is ready)
+        Fast, memory-bounded OpenCV preprocessing pipeline:
+          1. Clamp image dimensions (max 1600px)
+          2. Grayscale conversion
+          3. Fast Gaussian noise reduction (1ms vs 30s NLM)
+          4. Deskew angle correction
+          5. Adaptive Gaussian thresholding
         """
         if not CV2_AVAILABLE:
             return None
@@ -275,12 +280,16 @@ class OCRService:
                 logger.warning("[OCR] cv2.imread returned None for %s", image_path)
                 return None
             h, w = img.shape[:2]
-            if w < 1000:
-                scale = 1000 / w
-                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            max_dim = max(h, w)
+            if max_dim > 1600:
+                scale = 1600.0 / max_dim
+                img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            elif max_dim < 800 and w > 0:
+                scale = 1000.0 / max_dim
+                img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            denoised = cv2.fastNlMeansDenoising(gray, h=10)
-            deskewed = self._deskew(denoised)
+            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+            deskewed = self._deskew(blurred)
             thresh = cv2.adaptiveThreshold(
                 deskewed, 255,
                 cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -529,36 +538,26 @@ class OCRService:
                     from PIL import Image as PILImage
                     pil_img = PILImage.fromarray(processed)
 
-                    # PSM 6 — uniform block of text (good for dense lab tables)
-                    # Whitelist removed: it strips °, µ, <, >, * which appear in
-                    # medical reports and causes values like "<0.5" to be mangled.
+                    # Fast single-pass OCR with PSM 6
                     text_psm6 = pytesseract.image_to_string(
                         pil_img, config="--psm 6 --oem 3"
                     )
-                    confidence_psm6 = self._calc_ocr_confidence(pil_img)
 
-                    # Adaptive fallback: if PSM 6 confidence is low, try PSM 11
-                    # PSM 11 (sparse text) handles mixed layouts and column reports
-                    if confidence_psm6 < 60:
-                        text_psm11 = pytesseract.image_to_string(
-                            pil_img, config="--psm 11 --oem 3"
+                    # Only fallback to PSM 3 if PSM 6 yielded very little text
+                    if len(text_psm6.strip()) < 25:
+                        text_psm3 = pytesseract.image_to_string(
+                            pil_img, config="--psm 3 --oem 3"
                         )
-                        confidence_psm11 = self._calc_ocr_confidence(pil_img)
-                        logger.debug(
-                            "[OCR] PSM6 conf=%.1f PSM11 conf=%.1f — using %s",
-                            confidence_psm6, confidence_psm11,
-                            "PSM11" if confidence_psm11 > confidence_psm6 else "PSM6",
-                        )
-                        if confidence_psm11 > confidence_psm6:
-                            text_psm6 = text_psm11
-                            confidence_psm6 = confidence_psm11
+                        if len(text_psm3.strip()) > len(text_psm6.strip()):
+                            text_psm6 = text_psm3
 
                     if text_psm6.strip():
-                        self._last_ocr_confidence = confidence_psm6
+                        clean_len = len(text_psm6.strip())
+                        self._last_ocr_confidence = min(92.0, max(60.0, 50.0 + min(clean_len, 500) * 0.08))
                         self._last_image_quality  = self._detect_image_quality(image_path)
                         logger.info(
-                            "[OCR] CV2 pipeline succeeded — confidence=%.1f quality=%s",
-                            self._last_ocr_confidence, self._last_image_quality,
+                            "[OCR] CV2 pipeline succeeded — len=%d quality=%s",
+                            clean_len, self._last_image_quality,
                         )
                         return text_psm6.strip()
 

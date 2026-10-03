@@ -5,7 +5,7 @@ import {
   AlertTriangle, CheckCircle, XCircle, Pill, ShieldAlert,
   Stethoscope, ArrowLeft, MessageCircle, Salad, Home,
   FlaskConical, AlertOctagon, TrendingUp, ClipboardList, Beaker,
-  Download, LayoutDashboard,
+  Download, LayoutDashboard, Eye, Scale,
 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
@@ -38,6 +38,14 @@ interface AnalysisResult {
   criticalAlerts?: CriticalAlert[];
   reportType?: string;
   source?: string;
+  // Specialized dermatology & skin analysis fields
+  description?: string;
+  careCategory?: string;
+  comparison?: string;
+  selfCareTips?: string[];
+  redFlags?: string[];
+  possibleConditions?: string[];
+  isSkinAnalysis?: boolean;
 }
 
 function normalize(raw: Record<string, any>): AnalysisResult {
@@ -71,6 +79,13 @@ function normalize(raw: Record<string, any>): AnalysisResult {
     criticalAlerts:     raw?.critical_alerts ?? [],
     reportType:         raw?.report_type ?? '',
     source:             raw?.source ?? '',
+    description:        String(raw?.description ?? ''),
+    careCategory:       String(raw?.care_category ?? raw?.careCategory ?? ''),
+    comparison:         String(raw?.comparison ?? ''),
+    selfCareTips:       toArr(raw?.self_care_tips ?? raw?.selfCareTips),
+    redFlags:           toArr(raw?.red_flags ?? raw?.redFlags),
+    possibleConditions: toArr(raw?.possible_conditions ?? raw?.possibleConditions),
+    isSkinAnalysis:     Boolean(raw?.is_skin_analysis || raw?.report_type === 'skin_analysis'),
   };
 }
 
@@ -122,19 +137,35 @@ export default function ResultsPage() {
       `Generated     : ${new Date().toLocaleString()}`,
       '',
     ];
+    if (data.description) {
+      lines.push('Visual Findings & Description', '-'.repeat(30));
+      lines.push(data.description);
+      if (data.careCategory) lines.push(`Care Category: ${data.careCategory}`);
+      lines.push('');
+    }
     if (data.clinicalFindings?.length) {
       lines.push('Clinical Findings', '-'.repeat(30));
       data.clinicalFindings.forEach(f => lines.push(`• ${f}`));
       lines.push('');
     }
     if (data.medicines.length) {
-      lines.push('Medicines', '-'.repeat(30));
+      lines.push('Active Ingredients / Care Products', '-'.repeat(30));
       data.medicines.forEach(m => lines.push(`• ${m}`));
       lines.push('');
     }
+    if (data.comparison) {
+      lines.push('Comparison & Usage Precautions', '-'.repeat(30));
+      lines.push(data.comparison);
+      lines.push('');
+    }
     if (data.precautions.length) {
-      lines.push('Precautions', '-'.repeat(30));
+      lines.push('Precautions & Self-Care Tips', '-'.repeat(30));
       data.precautions.forEach(p => lines.push(`• ${p}`));
+      lines.push('');
+    }
+    if (data.redFlags?.length) {
+      lines.push('Red Flags (Seek Doctor Immediately)', '-'.repeat(30));
+      data.redFlags.forEach(rf => lines.push(`! ${rf}`));
       lines.push('');
     }
     if (data.recommendedTests?.length) {
@@ -180,7 +211,7 @@ export default function ResultsPage() {
           <motion.div className="flex items-center gap-2 mb-4" {...fadeUp(0.01)}>
             <span className="text-xs px-3 py-1 rounded-full font-medium border"
               style={{ backgroundColor: isDark ? 'rgba(99,102,241,0.12)' : 'rgba(99,102,241,0.08)', borderColor: 'rgba(99,102,241,0.3)', color: '#6366f1' }}>
-              📋 {data.reportType.charAt(0).toUpperCase() + data.reportType.slice(1)}
+              📋 {data.isSkinAnalysis ? 'Skin & Lesion Visual Analysis' : data.reportType.charAt(0).toUpperCase() + data.reportType.slice(1)}
             </span>
           </motion.div>
         )}
@@ -254,6 +285,41 @@ export default function ResultsPage() {
             </div>
           </div>
         </motion.div>
+
+        {/* Visual Findings & Clinical Description (Skin & Scan Analysis) */}
+        {data.description && (
+          <motion.div className="card p-6 mb-6" {...fadeUp(0.06)}>
+            <div className="flex items-center gap-2 mb-3">
+              <Eye className="w-5 h-5 text-blue-500" />
+              <h2 className="font-semibold" style={{ color: tp }}>Visible Findings & Clinical Description</h2>
+            </div>
+            <p className="text-sm leading-relaxed" style={{ color: tb }}>{data.description}</p>
+            {data.careCategory && (
+              <div className="mt-4 pt-3 border-t flex flex-wrap items-center gap-2" style={{ borderColor: isDark ? '#374151' : '#e5e7eb' }}>
+                <span className="text-xs font-semibold text-blue-500">Care Category:</span>
+                <span className="text-xs px-2.5 py-1 rounded-md font-medium"
+                  style={{ backgroundColor: 'rgba(59,130,246,0.1)', color: isDark ? '#60A5FA' : '#2563EB' }}>
+                  {data.careCategory}
+                </span>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* Alternative Conditions Considered */}
+        {data.possibleConditions && data.possibleConditions.length > 1 && (
+          <motion.div className="card p-4 mb-6" {...fadeUp(0.065)}>
+            <p className="text-xs font-semibold mb-2" style={{ color: ts }}>Alternative Conditions Considered:</p>
+            <div className="flex flex-wrap gap-2">
+              {data.possibleConditions.slice(1).map((cond, i) => (
+                <span key={i} className="text-xs px-2.5 py-1 rounded-full border"
+                  style={{ backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#f3f4f6', borderColor: isDark ? '#374151' : '#e5e7eb', color: ts }}>
+                  {cond}
+                </span>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         {/* Clinical Findings — structured sentences from report_analyzer_service */}
         {data.clinicalFindings && data.clinicalFindings.length > 0 && (
@@ -365,6 +431,17 @@ export default function ResultsPage() {
           )}
         </div>
 
+        {/* Active Ingredients Comparison & Steroid Warning */}
+        {data.comparison && (
+          <motion.div className="card p-6 mb-6" {...fadeUp(0.13)}>
+            <div className="flex items-center gap-2 mb-3">
+              <Scale className="w-5 h-5 text-indigo-500" />
+              <h2 className="font-semibold" style={{ color: tp }}>Active Ingredients Comparison & Safe Usage</h2>
+            </div>
+            <p className="text-sm whitespace-pre-line leading-relaxed" style={{ color: tb }}>{data.comparison}</p>
+          </motion.div>
+        )}
+
         <div className="grid md:grid-cols-2 gap-6 mb-6">
           {/* Diet */}
           {data.diet && data.diet.length > 0 && (
@@ -388,6 +465,25 @@ export default function ResultsPage() {
             </motion.div>
           )}
         </div>
+
+        {/* Red Flags Alert — When to consult a physician immediately */}
+        {data.redFlags && data.redFlags.length > 0 && (
+          <motion.div className="card p-6 mb-6 border" {...fadeUp(0.17)}
+            style={{ backgroundColor: 'rgba(239, 68, 68, 0.06)', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+            <div className="flex items-center gap-2 mb-3">
+              <ShieldAlert className="w-5 h-5 text-red-500" />
+              <h2 className="font-semibold text-red-600">🚨 Red Flags — When to Consult a Doctor Immediately</h2>
+            </div>
+            <ul className="space-y-2">
+              {data.redFlags.map((flag, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm text-red-700 dark:text-red-400">
+                  <span className="font-bold">•</span>
+                  <span>{flag}</span>
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        )}
 
         {/* Recommendations + Doctor Visit */}
         {data.recommendations.length > 0 && (

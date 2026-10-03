@@ -15,6 +15,58 @@ const SUPPORTED = [
   { icon: FileText,  label: 'Urine Reports',        desc: 'Urinalysis, culture' },
 ];
 
+// Compress / downscale large photos on the client before upload to prevent mobile timeouts
+async function compressImageIfNeeded(f: File): Promise<File> {
+  if (!f.type.startsWith('image/')) return f;
+  if (f.size <= 800 * 1024) return f;
+
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new window.Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 1600;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(f);
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            if (blob && blob.size < f.size) {
+              const compressedFile = new File([blob], f.name.replace(/\.[^.]+$/, '.jpg'), {
+                type: 'image/jpeg',
+                lastModified: Date.now(),
+              });
+              resolve(compressedFile);
+            } else {
+              resolve(f);
+            }
+          },
+          'image/jpeg',
+          0.85
+        );
+      };
+      img.onerror = () => resolve(f);
+    };
+    reader.onerror = () => resolve(f);
+    reader.readAsDataURL(f);
+  });
+}
+
 export default function UploadPage() {
   const { t } = useLanguage();
   const { isDark } = useTheme();
@@ -47,11 +99,13 @@ export default function UploadPage() {
 
   const handleAnalyze = async () => {
     if (!file) return;
-    setUploading(true); setError(''); setStatus('Uploading file...');
+    setUploading(true); setError(''); setStatus('Preparing image / file...');
     try {
-      setStatus('Extracting text with OCR...');
-      const res = await uploadAPI.upload(file);
-      setStatus('Analyzing medical data...');
+      const fileToUpload = await compressImageIfNeeded(file);
+      const isImg = fileToUpload.type.startsWith('image/');
+      setStatus(isImg ? 'Analyzing visual indicators & skin patterns...' : 'Extracting text with OCR...');
+      const res = await uploadAPI.upload(fileToUpload);
+      setStatus('Finalizing AI assessment...');
 
       if (!res.data.success && res.data.error) {
         setError(res.data.error);
@@ -61,7 +115,7 @@ export default function UploadPage() {
 
       navigate('/results', { state: { analysisData: res.data, fileName: file.name } });
     } catch (err: any) {
-      const msg = err?.response?.data?.error || 'Upload failed. Please check your connection and try again.';
+      const msg = err?.response?.data?.error || err?.message || 'Upload failed. Please check your connection and try again.';
       setError(msg);
     } finally {
       setUploading(false); setStatus('');

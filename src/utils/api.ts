@@ -5,7 +5,7 @@ const BASE = (import.meta.env.VITE_API_BASE && !import.meta.env.VITE_API_BASE.in
   ? import.meta.env.VITE_API_BASE
   : (import.meta.env.DEV ? 'http://localhost:5000' : '');
 
-export const api = axios.create({ baseURL: BASE, timeout: 10000 });
+export const api = axios.create({ baseURL: BASE, timeout: 15000 });
 
 // Inject JWT on every request if present
 api.interceptors.request.use((config) => {
@@ -29,7 +29,10 @@ export const uploadAPI = {
   upload: (file: File) => {
     const form = new FormData();
     form.append('file', file);
-    return api.post('/api/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return api.post('/api/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000, // 60s timeout for large uploads
+    });
   },
 };
 
